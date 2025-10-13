@@ -1,0 +1,7 @@
+# Pastas de build
+build/
+dist/
+
+# Arquivos binários grandes
+*.zip
+*.exe
