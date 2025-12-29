@@ -133,6 +133,42 @@ def conectar_ao_mysql() -> Tuple[Optional[object], Optional[object], Optional[st
 def apenas_digitos(s: str) -> str:
     return re.sub(r'\D+', '', s or '')
 
+def tipo_doc(s:str) -> Optional[str]:
+    d = apenas_digitos(s)
+    if len(d) == 14:
+        return "CNPJ"
+    if len(d) == 11:
+        return "CPF"
+    return None
+
+def formatar_cpf(cpf: str) -> str:
+    d = apenas_digitos(cpf)
+    if len(d) != 11:
+        return cpf.strip()
+    return f"{d[0:3]}.{d[3:6]}.{d[6:9]}-{d[9:11]}"
+
+def formatar_doc(doc: str) -> str:
+    t = tipo_doc(doc)
+    if t == "CNPJ":
+        return formatar_cnpj(doc)
+    if t == "CPF":
+        return formatar_cpf(doc)
+    return doc.strip()
+
+def validar_cpf(cpf: str) -> bool:
+    d = apenas_digitos(cpf)
+    if len(d) != 11 or len(set(d)) == 1:
+        return False
+    # DV1
+    s = sum(int(n) * p for n, p in zip(d[:9], range(10, 1, -1)))
+    dv1 = (s * 10) % 11
+    dv1 = 0 if dv1 == 10 else dv1
+    # DV2
+    s = sum(int(n) * p for n, p in zip(d[:9] + str(dv1), range(11, 1, -1)))
+    dv2 = (s * 10) % 11
+    dv2 = 0 if dv2 == 10 else dv2
+    return d[-2:] == f"{dv1}{dv2}"
+
 def formatar_cnpj(cnpj: str) -> str:
     d = apenas_digitos(cnpj)
     if len(d) != 14:
@@ -183,14 +219,23 @@ def _get_receitaws_cnpj(cnpj: str, timeout: float = 8.0) -> Optional[str]:
         pass
     return None
 
-def obter_razao_social(cnpj: str) -> Tuple[bool, str, str]:
-    #if not validar_cnpj(cnpj):
-    #    return False, "CNPJ inválido (DV).", formatar_cnpj(cnpj)
-    fmt = formatar_cnpj(cnpj)
-    razao = _get_brasilapi_cnpj(cnpj) or _get_receitaws_cnpj(cnpj)
-    if razao:
-        return True, razao, fmt
-    return False, "Não encontrado ou serviço indisponível.", fmt
+def obter_razao_social(doc: str) -> Tuple[bool, str, str]:
+    t = tipo_doc(doc)
+    fmt = formatar_doc(doc)
+    if t == "CNPJ":
+
+        #if not validar_cnpj(cnpj):
+        #    return False, "CNPJ inválido (DV).", formatar_cnpj(cnpj)
+        razao = _get_brasilapi_cnpj(doc) or _get_receitaws_cnpj(doc)
+
+        if razao:
+            return True, razao, fmt
+        return False, "Não encontrado ou serviço indisponível.", fmt
+
+    if t == "CPF":
+        return False, "Para CPF não há consulta automática. Informe o nome e prossiga.", fmt
+
+    return False, "Documento deve ter 11 (CPF) ou 14 (CNPJ) dígitos.", fmt
 
 # =========================
 # Lógica de Cadastro/Atualização
@@ -239,10 +284,10 @@ def inserir_grupo(cursor, novo_id: int, codequipe: int, nome_grupo: str):
     )
 
 def inserir_cliente(cursor, id_grupo: int, nome_cliente: str, cnpj: str):
-    cnpj_fmt = formatar_cnpj(cnpj)
+    doc_fmt = formatar_cnpj(cnpj)
     cursor.execute(
         "INSERT INTO thcliente (grupo_id, name_cli, cnpj) VALUES (%s, %s, %s)",
-        (id_grupo, nome_cliente.strip(), cnpj_fmt)
+        (id_grupo, nome_cliente.strip().upper(), doc_fmt)
     )
 
 def cadastrar_cliente(nome_equipe: str, nome_grupo: str, nome_cliente: str, cnpj: str) -> Tuple[bool, str]:
@@ -323,7 +368,7 @@ def atualizar_nome_cliente(cnpj: str, novo_nome: str) -> Tuple[bool, str, int]:
         WHERE REPLACE(REPLACE(REPLACE(cnpj,'.',''),'-',''),'/','') LIKE %s
         """
         # Passa a string com o padrão LIKE como segundo parâmetro
-        cur.execute(sql, (novo_nome.strip(), cnpj_like_pattern))
+        cur.execute(sql, (novo_nome.strip().upper(), cnpj_like_pattern))
         conn.commit()
         rows = cur.rowcount or 0
 
@@ -391,7 +436,7 @@ class CadastroClienteApp(tk.Tk):
         self.in_cliente.grid(row=row, column=1, sticky="w", pady=6, columnspan=3)
 
         row += 1
-        ttk.Label(outer, text="CNPJ:").grid(row=row, column=0, sticky="w", pady=6)
+        ttk.Label(outer, text="CNPJ/CPF:").grid(row=row, column=0, sticky="w", pady=6)
         self.in_cnpj = ttk.Entry(outer, width=28)
         self.in_cnpj.grid(row=row, column=1, sticky="w", pady=6)
 
@@ -508,7 +553,7 @@ class CadastroClienteApp(tk.Tk):
     def on_submit(self):
         equipe  = self.cmb_equipe.get().strip()
         grupo   = self.in_grupo.get().strip()
-        cliente = self.in_cliente.get().strip()
+        cliente = self.in_cliente.get().strip().upper()
         cnpj    = self.in_cnpj.get().strip()
 
         if not (equipe and grupo and cliente and cnpj):

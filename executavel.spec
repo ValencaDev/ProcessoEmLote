@@ -1,16 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_submodules
 
-datas = []
-datas += collect_data_files('mysql.connector')
+hiddenimports = []
+hiddenimports += collect_submodules('mysql.connector')
 
 
 a = Analysis(
     ['executavel.py'],
     pathex=[],
     binaries=[],
-    datas=datas,
-    hiddenimports=['mysql.connector.locales', 'mysql.connector.locales.eng'],
+    datas=[('.env', '.')],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

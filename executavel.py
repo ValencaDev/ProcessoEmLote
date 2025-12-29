@@ -182,15 +182,15 @@ TODAY_STR = datetime.now().strftime('%d/%m/%Y')
 COMPANY_PRESETS: Dict[str, Dict[str, object]] = {
     'ENEL (RJ)': {
         'nomegrupo_id': '101',
-        'solicitanteAndamento': '438',
+        'solicitanteAndamento': '356',
         'responsavelAndamento': '353',
         'corresponsavelAndamento': '438',
-        'prioridadeDe': '438',
+        'prioridadeDe': '356',
         'orgao': 'TJ - RJ',
         'tipoEvento': '1035',
         'corresponsavel': '32',
-        'solicitanteEvento': '438',
-        'responsavelEvento': '455',
+        'solicitanteEvento': '356',
+        'responsavelEvento': '353',
         'codlote': f'Enel {TODAY_STR}',
         'carteira': '101',
     },
@@ -260,7 +260,7 @@ COMPANY_PRESETS: Dict[str, Dict[str, object]] = {
         'responsavelEvento': '481',
     },
     'NOTREDAME – TRABALHISTA': {
-        'nomegrupo_id': '48',
+        'nomegrupo_id': '21',
         'prioridadeDe': '477',
         'solicitanteAndamento': '477',
         'responsavelAndamento': '477',
@@ -325,7 +325,7 @@ COMPANY_PRESETS: Dict[str, Dict[str, object]] = {
         'responsavelEvento': '140',
     },
 'PAGUE MENOS CIVEL':{
-        'nomegrupo_id': '29',
+        'nomegrupo_id': '200',
         'prioridadeDe':'8',
         'solicitanteAndamento': '61',
         'responsavelAndamento': '61',
@@ -341,7 +341,7 @@ COMPANY_PRESETS: Dict[str, Dict[str, object]] = {
 
     },
 'PAGUE MENOS TRABALHISTA':{
-        'nomegrupo_id': '35',
+        'nomegrupo_id': '200',
         'prioridadeDe':'479',
         'solicitanteAndamento': '227',
         'responsavelAndamento': '227',
@@ -489,7 +489,54 @@ COMPANY_PRESETS: Dict[str, Dict[str, object]] = {
      'solicitanteEvento': '438',
      'tipoAndamento': 'Não Informado',
      'responsavelEvento': '492',
- }
+ },
+'ITAPEVA':{
+     'nomegrupo_id': '65',
+     'prioridadeDe':'513',
+     'solicitanteAndamento': '513',
+     'responsavelAndamento': '56',
+     'corresponsavelAndamento': '513',
+     'orgao': 'STJ',
+     'corresponsavel': '47',
+     'codlote': f'ITAPEVA {TODAY_STR}',
+     'carteira': '65',
+     'tipoEvento': '1234',
+     'solicitanteEvento': '513',
+     'tipoAndamento': 'Não Informado',
+     'responsavelEvento': '513',
+ },
+'SERVIÇOS':{
+     'nomegrupo_id': '32',
+     'prioridadeDe':'88',
+     'solicitanteAndamento': '202',
+     'responsavelAndamento': '202',
+     'corresponsavelAndamento': '202',
+     'orgao': 'STJ',
+     'corresponsavel': '12',
+     'codlote': f'SERVIÇOS {TODAY_STR}',
+     'carteira': '32',
+     'tipoEvento': '1238',
+     'solicitanteEvento': '202',
+     'tipoAndamento': 'Não Informado',
+     'responsavelEvento': '88',
+ },
+'PUBLICO':{
+     'nomegrupo_id': '55',
+     'prioridadeDe':'201',
+     'solicitanteAndamento': '201',
+     'responsavelAndamento': '201',
+     'corresponsavelAndamento': '201',
+     'corresponsavel': '37',
+     'codlote': f'PUBLICO {TODAY_STR}',
+     'carteira': '55',
+     'tipoEvento': '1084',
+     'solicitanteEvento': '201',
+     'tipoAndamento': 'Não Informado',
+     'responsavelEvento': '255',
+ },
+
+
+
 }
 
 COMMON_DEFAULTS = {
