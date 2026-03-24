@@ -592,15 +592,15 @@ COMPANY_PRESETS: Dict[str, Dict[str, object]] = {
         'responsavelEvento': '386',
      },
     'COBRANÇA JUDICIAL':{
-        'nomegrupo_id': '1',
+        'nomegrupo_id': '41',
         'prioridadeDe':'557',
         'solicitanteAndamento': '245',
         'responsavelAndamento': '245',
         'corresponsavelAndamento': '245',
-        'corresponsavel': '18',
+        'corresponsavel': '24',
         'codlote': f'COBRANÇA JUDICIAL {TODAY_STR}',
         'carteira': '41',
-        'tipoEvento': '39',
+        'tipoEvento': '582',
         'solicitanteEvento': '245',
         'tipoAndamento': 'Não Informado',
         'responsavelEvento': '557',
@@ -1217,7 +1217,6 @@ class MigracoesApp(tk.Tk):
         ttk.Button(btns, text='Testar Conexão', command=self.on_test_conn).pack(side='left')
         ttk.Button(btns, text='Pré-visualizar', command=self.on_preview).pack(side='left', padx=6)
         ttk.Button(btns, text='Enviar ao Banco', command=self.on_send).pack(side='left')
-        ttk.Button(btns, text='Janela Alternativa', command=self.open_alt_window).pack(side='left', padx=6)
 
         # Árvore de preview
         self.tree = ttk.Treeview(self, columns=('info',), show='headings')
