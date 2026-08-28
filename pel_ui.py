@@ -633,7 +633,8 @@ class MigracoesApp(tk.Tk):
             if not ok_cnj:
                 msg = (
                     "A planilha não pode ser processada.\n\n"
-                    "O campo 'cnj' não pode começar com espaço em branco.\n"
+                    "Para natureza 'Administrativa', o campo 'cnj' não pode ficar vazio.\n"
+                    "Para as demais naturezas, o campo 'cnj' não pode começar com espaço em branco.\n"
                 )
                 if linhas_cnj_invalidas:
                     msg += f"\nLinhas com erro: {', '.join(map(str, linhas_cnj_invalidas[:20]))}"
@@ -782,7 +783,8 @@ class MigracoesApp(tk.Tk):
         if not ok_cnj:
             msg = (
                 "O envio foi bloqueado.\n\n"
-                "O campo 'cnj' não pode começar com espaço em branco.\n"
+                "Para natureza 'Administrativa', o campo 'cnj' não pode ficar vazio.\n"
+                "Para as demais naturezas, o campo 'cnj' não pode começar com espaço em branco.\n"
             )
             if linhas_cnj_invalidas:
                 msg += f"\nLinhas com erro: {', '.join(map(str, linhas_cnj_invalidas[:20]))}"
@@ -930,4 +932,9 @@ class MigracoesApp(tk.Tk):
                 'Erro ao Gerar Planilha',
                 f'Erro ao gerar planilha de duplicados:\n{e}'
             )
+
+
+if __name__ == '__main__':
+    app = MigracoesApp()
+    app.mainloop()
 

@@ -105,7 +105,8 @@ colunas_thproc = [
     'parecerDoProcesso', 'data_hora_submit', 'data_hora_export',
     'usuario_submit_id', 'usuario_export_id', 'valorFinalCausa',
     'tipoPoloCliente', 'data_resultado', 'tipo_resultado',
-    'descricao_resultado', 'Adv_parte_contraria', 'codnatureza',
+    'descricao_resultado', 'Adv_parte_contraria', 'advogadoParteContraria',
+    'dataCitacao', 'codnatureza',
     'codparte_polo_ativo', 'codpolo_cliente', 'codsistema_externo',
     'codstatus', 'codfase', 'codespecialidade', 'codorgao', 'codmateria',
     'codtipo_rito', 'codcomarca', 'codparte_polo_passivo', 'codunidade',
@@ -605,6 +606,77 @@ COMPANY_PRESETS: Dict[str, Dict[str, object]] = {
         'tipoAndamento': 'Não Informado',
         'responsavelEvento': '557',
     },
+    'VERZANI':{
+        'nomegrupo_id': '57',
+        'prioridadeDe':'278',
+        'solicitanteAndamento': '376',
+        'responsavelAndamento': '376',
+        'corresponsavelAndamento': '376',
+        'corresponsavel': '40',
+        'codlote': f'VERZANI {TODAY_STR}',
+        'carteira': '57',
+        'tipoEvento': '1118',
+        'solicitanteEvento': '376',
+        'tipoAndamento': 'Não Informado',
+        'responsavelEvento': '278',
+    },
+    'ENEL (SP)':{
+        'nomegrupo_id': '6493',
+        'prioridadeDe':'612',
+        'solicitanteAndamento': '376',
+        'responsavelAndamento': '376',
+        'corresponsavelAndamento': '376',
+        'corresponsavel': '56',
+        'codlote': f'ENEJ SP {TODAY_STR}',
+        'carteira': '124',
+        'tipoEvento': '1370',
+        'solicitanteEvento': '612',
+        'tipoAndamento': 'Não Informado',
+        'responsavelEvento': '612',
+    },
+    'RD ADMINISTRATIVO':{
+            'nomegrupo_id': '434',
+            'prioridadeDe':'625',
+            'solicitanteAndamento': '625',
+            'responsavelAndamento': '625',
+            'corresponsavelAndamento': '625',
+            'corresponsavel': '42',
+            'codlote': f'RD ADMINISTRATIVO{TODAY_STR}',
+            'carteira': '59',
+            'tipoEvento': '1160',
+            'solicitanteEvento': '63',
+            'tipoAndamento': 'Não Informado',
+            'responsavelEvento': '625',
+    },
+    'EDUCACIONAL TRAB ADM':{
+            'nomegrupo_id': '39',
+            'prioridadeDe':'276',
+            'solicitanteAndamento': '276',
+            'responsavelAndamento': '276',
+            'corresponsavelAndamento': '276',
+            'corresponsavel': '53',
+            'codlote': f'EDUCACIONAL TRAB ADM{TODAY_STR}',
+            'carteira': '119',
+            'tipoEvento': '1029',
+            'solicitanteEvento': '608',
+            'tipoAndamento': 'Não Informado',
+            'responsavelEvento': '276',
+        },
+    'RD TRABALHISTA':{
+                'nomegrupo_id': '434',
+                'prioridadeDe':'450',
+                'solicitanteAndamento': '450',
+                'responsavelAndamento': '450',
+                'corresponsavelAndamento': '450',
+                'corresponsavel': '55',
+                'codlote': f'RD TRABALHISTA{TODAY_STR}',
+                'carteira': '121',
+                'tipoEvento': '1372',
+                'solicitanteEvento': '247',
+                'tipoAndamento': 'Não Informado',
+                'responsavelEvento': '450',
+            }
+
 }
 
 COMMON_DEFAULTS = {
@@ -627,6 +699,8 @@ OPTIONAL_INPUT_DEFAULTS = {
     'estado': '',
     'materia': '',
     'tipoInstancia': '',
+    'advogadoParteContraria': None,
+    'dataCitacao': None,
 }
 
 OPTIONAL_INPUT_COLUMNS = set(OPTIONAL_INPUT_DEFAULTS)
@@ -638,12 +712,12 @@ CAMPOS_TEXTO_255 = [
     'fase','status','carteira','prioridadeDe','tipoEvento','solicitanteEvento','responsavelEvento',
     'corresponsavel','sistemaExterno','tipoAndamento','solicitanteAndamento','responsavelAndamento',
     'corresponsavelAndamento','descricaoObjeto','escritorioCredenciado','tipoPoloCliente','tipo_resultado',
-    'Adv_parte_contraria'
+    'Adv_parte_contraria','advogadoParteContraria'
 ]
 
 COLUNAS_DATA = [
     'dataDistribuicao','dataInstancia','dataFase','dataStatus','dataEvento','dataValorProvisionado',
-    'dataAndamento','dataContratacao','data_resultado'
+    'dataAndamento','dataContratacao','data_resultado','dataCitacao'
 ]
 
 # ==============================
@@ -951,6 +1025,17 @@ def normalizar_vazios_para_null(df: pd.DataFrame) -> pd.DataFrame:
             df[coluna] = serie.mask(mascara_vazia, pd.NA)
     return df
 
+def normalizar_campo_natureza(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove espacos excedentes no final da coluna natureza."""
+    if 'natureza' not in df.columns:
+        return df
+
+    df = df.copy()
+    serie = df['natureza']
+    mascara_preenchida = serie.notna()
+    df.loc[mascara_preenchida, 'natureza'] = serie.loc[mascara_preenchida].astype(str).str.rstrip()
+    return df
+
 def aplicar_presets(df: pd.DataFrame, empresa: str) -> pd.DataFrame:
     """Aplica defaults comuns e presets específicos por empresa."""
     # Defaults comuns: preenche nulos ou cria coluna
@@ -971,6 +1056,8 @@ def aplicar_presets(df: pd.DataFrame, empresa: str) -> pd.DataFrame:
 
 def preparar_dataframe(df: pd.DataFrame, empresa: str) -> pd.DataFrame:
     """Prepara o DataFrame para preview/envio conforme a equipe selecionada."""
+    df = normalizar_campo_natureza(df)
+
     if usa_fluxo_regular(empresa):
         df = normalizar_vazios_para_null(df)
         df['carteira'] = '46'
@@ -1018,14 +1105,17 @@ def validar_campo_natureza(df: pd.DataFrame) -> Tuple[bool, List[int], List[str]
     return len(linhas_invalidas) == 0, linhas_invalidas, valores_invalidos
 
 def validar_campo_cnj(df: pd.DataFrame) -> Tuple[bool, List[int]]:
-    """Valida se a coluna 'cnj' não começa com espaço em branco."""
+    """Valida CNJ: Administrativa aceita qualquer formato, exceto vazio."""
     if 'cnj' not in df.columns:
         return False, []
 
     serie = df['cnj'].astype('string')
-    mascara_preenchida = serie.notna()
+    natureza = df['natureza'].fillna('').astype(str).str.strip() if 'natureza' in df.columns else pd.Series('', index=df.index)
+    mascara_administrativa = natureza.eq('Administrativa')
+    mascara_vazia = serie.isna() | serie.str.strip().fillna('').eq('')
     mascara_espaco_inicial = serie.str.startswith((' ', '\t'), na=False)
-    linhas_invalidas = (df.index[mascara_preenchida & mascara_espaco_inicial] + 2).tolist()
+    mascara_invalida = (mascara_administrativa & mascara_vazia) | (~mascara_administrativa & mascara_espaco_inicial)
+    linhas_invalidas = (df.index[mascara_invalida] + 2).tolist()
     return len(linhas_invalidas) == 0, linhas_invalidas
 
 def montar_registros(
@@ -1052,6 +1142,8 @@ def montar_registros(
                     valores.append(valor.date())
                 else:
                     valores.append(valor)
+            elif coluna == 'natureza' and isinstance(valor, str):
+                valores.append(valor.rstrip())
             else:
                 valores.append(valor)
         registros.append(tuple(valores))

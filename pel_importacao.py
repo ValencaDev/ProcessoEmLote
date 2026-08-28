@@ -93,6 +93,17 @@ def normalizar_vazios_para_null(df: pd.DataFrame) -> pd.DataFrame:
             df[coluna] = serie.mask(mascara_vazia, pd.NA)
     return df
 
+def normalizar_campo_natureza(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove espacos excedentes no final da coluna natureza."""
+    if 'natureza' not in df.columns:
+        return df
+
+    df = df.copy()
+    serie = df['natureza']
+    mascara_preenchida = serie.notna()
+    df.loc[mascara_preenchida, 'natureza'] = serie.loc[mascara_preenchida].astype(str).str.rstrip()
+    return df
+
 def aplicar_presets(df: pd.DataFrame, empresa: str) -> pd.DataFrame:
     """Aplica defaults comuns e presets específicos por empresa."""
     # Defaults comuns: preenche nulos ou cria coluna
@@ -113,6 +124,8 @@ def aplicar_presets(df: pd.DataFrame, empresa: str) -> pd.DataFrame:
 
 def preparar_dataframe(df: pd.DataFrame, empresa: str) -> pd.DataFrame:
     """Prepara o DataFrame para preview/envio conforme a equipe selecionada."""
+    df = normalizar_campo_natureza(df)
+
     if usa_fluxo_regular(empresa):
         df = normalizar_vazios_para_null(df)
         df['carteira'] = '46'
@@ -160,14 +173,17 @@ def validar_campo_natureza(df: pd.DataFrame) -> Tuple[bool, List[int], List[str]
     return len(linhas_invalidas) == 0, linhas_invalidas, valores_invalidos
 
 def validar_campo_cnj(df: pd.DataFrame) -> Tuple[bool, List[int]]:
-    """Valida se a coluna 'cnj' não começa com espaço em branco."""
+    """Valida CNJ: Administrativa aceita qualquer formato, exceto vazio."""
     if 'cnj' not in df.columns:
         return False, []
 
     serie = df['cnj'].astype('string')
-    mascara_preenchida = serie.notna()
+    natureza = df['natureza'].fillna('').astype(str).str.strip() if 'natureza' in df.columns else pd.Series('', index=df.index)
+    mascara_administrativa = natureza.eq('Administrativa')
+    mascara_vazia = serie.isna() | serie.str.strip().fillna('').eq('')
     mascara_espaco_inicial = serie.str.startswith((' ', '\t'), na=False)
-    linhas_invalidas = (df.index[mascara_preenchida & mascara_espaco_inicial] + 2).tolist()
+    mascara_invalida = (mascara_administrativa & mascara_vazia) | (~mascara_administrativa & mascara_espaco_inicial)
+    linhas_invalidas = (df.index[mascara_invalida] + 2).tolist()
     return len(linhas_invalidas) == 0, linhas_invalidas
 
 def montar_registros(
@@ -194,6 +210,8 @@ def montar_registros(
                     valores.append(valor.date())
                 else:
                     valores.append(valor)
+            elif coluna == 'natureza' and isinstance(valor, str):
+                valores.append(valor.rstrip())
             else:
                 valores.append(valor)
         registros.append(tuple(valores))

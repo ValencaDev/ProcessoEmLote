@@ -5,16 +5,27 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from executavel import colunas_thproc_regular, conectar_ao_mysql, listar_carteiras
+from executavel import (
+    COLUNAS_DATA,
+    OPTIONAL_INPUT_DEFAULTS,
+    RENAME_MAP,
+    colunas_thproc_regular,
+    conectar_ao_mysql,
+    listar_carteiras,
+)
 
 
 COLUNAS_INSERIVEIS = list(dict.fromkeys(colunas_thproc_regular))
+USUARIO_SUBMIT_ID_PADRAO = 18
 MAPEAMENTO_COLUNAS_PLANILHA = {
+    **RENAME_MAP,
     "Cliente": "cliente",
+    "Tipo Cliente": "tipoPoloCliente",
     "Corresponsável": "corresponsavel",
     "Tipo Evento": "tipoEvento",
     "Solicitante do Andamento": "solicitanteAndamento",
@@ -32,6 +43,16 @@ COLUNAS_AUTH_USER_FULLNAME = [
     "solicitanteEvento",
     "responsavelEvento",
 ]
+DEFAULTS_FLUXO_REGULAR = {
+    **OPTIONAL_INPUT_DEFAULTS,
+    "verificado": 0,
+    "exportado": 0,
+    "excluido": 0,
+}
+TIPOS_POLO_CLIENTE_VALIDOS = {
+    "ativo": "Ativo",
+    "passivo": "Passivo",
+}
 
 
 @dataclass
@@ -62,14 +83,127 @@ def normalizar_valor_sql(valor):
         return None
     if isinstance(valor, pd.Timestamp):
         return valor.to_pydatetime()
+    if isinstance(valor, np.generic):
+        return valor.item()
+    return valor
+
+
+def normalizar_valor_coluna_sql(coluna: str, valor):
+    valor = normalizar_valor_sql(valor)
+    if coluna == "natureza" and isinstance(valor, str):
+        return valor.rstrip()
     return valor
 
 
 def montar_registros_crus(df: pd.DataFrame, colunas: List[str]) -> List[Tuple]:
     registros: List[Tuple] = []
     for row in df[colunas].itertuples(index=False, name=None):
-        registros.append(tuple(normalizar_valor_sql(valor) for valor in row))
+        registros.append(tuple(normalizar_valor_coluna_sql(coluna, valor) for coluna, valor in zip(colunas, row)))
     return registros
+
+
+def preparar_campos_submit(df: pd.DataFrame, colunas: List[str]) -> tuple[pd.DataFrame, List[str]]:
+    df_envio = formatar_datas_para_envio(df)
+    colunas_envio = list(colunas)
+
+    if "data_hora_submit" in COLUNAS_INSERIVEIS:
+        df_envio["data_hora_submit"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if "data_hora_submit" not in colunas_envio:
+            colunas_envio.append("data_hora_submit")
+
+    if "usuario_submit_id" in COLUNAS_INSERIVEIS:
+        df_envio["usuario_submit_id"] = USUARIO_SUBMIT_ID_PADRAO
+        if "usuario_submit_id" not in colunas_envio:
+            colunas_envio.append("usuario_submit_id")
+
+    return df_envio, colunas_envio
+
+
+def formatar_datas_para_envio(df: pd.DataFrame) -> pd.DataFrame:
+    df_formatado = df.copy()
+
+    for coluna in COLUNAS_DATA:
+        if coluna not in df_formatado.columns:
+            continue
+
+        serie = pd.to_datetime(df_formatado[coluna], errors="coerce", dayfirst=True)
+        df_formatado[coluna] = pd.Series(pd.NA, index=df_formatado.index, dtype="string")
+        mascara_valida = serie.notna()
+        df_formatado.loc[mascara_valida, coluna] = serie.loc[mascara_valida].dt.strftime("%Y-%m-%d")
+
+    return df_formatado
+
+
+def normalizar_vazios_para_null(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for coluna in df.columns:
+        serie = df[coluna]
+        if pd.api.types.is_object_dtype(serie) or pd.api.types.is_string_dtype(serie):
+            texto = serie.astype("string")
+            mascara_vazia = texto.str.strip().eq("")
+            df[coluna] = serie.mask(mascara_vazia, pd.NA)
+    return df
+
+
+def preparar_dataframe_para_insert(df: pd.DataFrame) -> pd.DataFrame:
+    df = normalizar_vazios_para_null(df.copy())
+
+    if "cnj" in df.columns:
+        df["cnj"] = df["cnj"].astype("string").str.strip().replace({"": pd.NA})
+    if "natureza" in df.columns:
+        mascara_preenchida = df["natureza"].notna()
+        df.loc[mascara_preenchida, "natureza"] = df.loc[mascara_preenchida, "natureza"].astype(str).str.rstrip()
+
+    for coluna in COLUNAS_INSERIVEIS:
+        if coluna not in df.columns:
+            df[coluna] = DEFAULTS_FLUXO_REGULAR.get(coluna)
+
+    return df
+
+
+def filtrar_linhas_sem_cnj(df: pd.DataFrame) -> tuple[pd.DataFrame, List[int]]:
+    if "cnj" not in df.columns:
+        return df.copy(), []
+
+    serie = df["cnj"].astype("string").str.strip()
+    mascara_preenchida = serie.notna() & ~serie.eq("")
+    if "natureza" in df.columns:
+        natureza = df["natureza"].fillna("").astype(str).str.strip()
+        mascara_administrativa = natureza.eq("Administrativa")
+    else:
+        mascara_administrativa = pd.Series(False, index=df.index)
+    mascara_valida = mascara_preenchida | mascara_administrativa
+    linhas_ignoradas = (df.index[~mascara_valida] + 2).tolist()
+    return df.loc[mascara_valida].copy(), linhas_ignoradas
+
+
+def linhas_administrativas_sem_cnj(df: pd.DataFrame) -> List[int]:
+    if "cnj" not in df.columns or "natureza" not in df.columns:
+        return []
+
+    cnj = df["cnj"].astype("string").str.strip()
+    natureza = df["natureza"].fillna("").astype(str).str.strip()
+    mascara_invalida = natureza.eq("Administrativa") & (cnj.isna() | cnj.eq(""))
+    return (df.index[mascara_invalida] + 2).tolist()
+
+
+def validar_tipo_polo_cliente(df: pd.DataFrame) -> tuple[pd.DataFrame, bool, List[int], List[str]]:
+    if "tipoPoloCliente" not in df.columns:
+        return df.copy(), False, [], []
+
+    df_validado = df.copy()
+    serie = df_validado["tipoPoloCliente"].astype("string").str.strip()
+    serie_normalizada = serie.str.lower()
+    mascara_preenchida = serie.notna() & ~serie.eq("")
+    mascara_valida = mascara_preenchida & serie_normalizada.isin(TIPOS_POLO_CLIENTE_VALIDOS)
+
+    df_validado["tipoPoloCliente"] = serie_normalizada.map(TIPOS_POLO_CLIENTE_VALIDOS)
+
+    linhas_invalidas = (df_validado.index[~mascara_valida] + 2).tolist()
+    valores_invalidos = sorted(
+        serie[~mascara_valida].fillna("<vazio>").replace("", "<vazio>").unique().tolist()
+    )
+    return df_validado, len(linhas_invalidas) == 0, linhas_invalidas, valores_invalidos
 
 
 def normalizar_colunas_planilha(df: pd.DataFrame) -> pd.DataFrame:
@@ -522,7 +656,8 @@ class MigracoesSemTratamentoApp(tk.Tk):
                 conn.close()
                 self.after(0, lambda: self._finish_test_conn(True, "Conexao com MySQL OK!"))
             except Exception as err:
-                self.after(0, lambda: self._finish_test_conn(False, str(err)))
+                msg = str(err)
+                self.after(0, lambda msg=msg: self._finish_test_conn(False, msg))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -581,13 +716,51 @@ class MigracoesSemTratamentoApp(tk.Tk):
             df, campos_sem_id = aplicar_ids_por_fullname(df)
             df, corresponsaveis_sem_id = aplicar_corresponsavel_id(df)
             df, tipos_evento_sem_id = aplicar_tipo_evento_id(df)
-            insert_columns = [str(col) for col in df.columns if str(col) in COLUNAS_INSERIVEIS]
+            df = preparar_dataframe_para_insert(df)
 
             if "cliente" not in df.columns:
                 criticas.append("Coluna 'cliente' nao encontrada. 'nomegrupo_id' nao foi gerado.")
 
-            if not insert_columns:
-                criticas.append("Nenhuma coluna da planilha corresponde aos campos da tabela thproc.")
+            linhas_cnj_ignoradas: List[int] = []
+            if "cnj" not in df.columns:
+                criticas.append("Coluna obrigatoria 'cnj' nao encontrada na planilha.")
+            else:
+                linhas_admin_sem_cnj = linhas_administrativas_sem_cnj(df)
+                if linhas_admin_sem_cnj:
+                    exibicao_linhas = ", ".join(map(str, linhas_admin_sem_cnj[:10]))
+                    if len(linhas_admin_sem_cnj) > 10:
+                        exibicao_linhas += " ..."
+                    criticas.append(
+                        "Processos com natureza 'Administrativa' devem ter o campo 'cnj' preenchido. "
+                        f"Linhas com erro: {exibicao_linhas}."
+                    )
+                df, linhas_cnj_ignoradas = filtrar_linhas_sem_cnj(df)
+                if linhas_cnj_ignoradas:
+                    exibicao_linhas = ", ".join(map(str, linhas_cnj_ignoradas[:10]))
+                    if len(linhas_cnj_ignoradas) > 10:
+                        exibicao_linhas += " ..."
+                    avisos.append(
+                        "Linhas ignoradas por 'cnj' vazio: "
+                        f"{exibicao_linhas}"
+                    )
+                if df.empty:
+                    criticas.append("Nenhuma linha valida restou para envio apos ignorar os registros com 'cnj' vazio.")
+
+            if "tipoPoloCliente" not in df.columns:
+                criticas.append("Coluna obrigatoria 'Tipo Cliente' nao encontrada na planilha.")
+            else:
+                df, ok_tipo_polo_cliente, linhas_invalidas_tipo_cliente, valores_invalidos_tipo_cliente = validar_tipo_polo_cliente(df)
+                if not ok_tipo_polo_cliente:
+                    exibicao_linhas = ", ".join(map(str, linhas_invalidas_tipo_cliente[:10]))
+                    if len(linhas_invalidas_tipo_cliente) > 10:
+                        exibicao_linhas += " ..."
+                    criticas.append(
+                        "A coluna 'Tipo Cliente' deve conter apenas 'Ativo' ou 'Passivo'. "
+                        f"Linhas com erro: {exibicao_linhas}. "
+                        f"Valores encontrados: {', '.join(valores_invalidos_tipo_cliente[:10])}"
+                    )
+
+            insert_columns = list(COLUNAS_INSERIVEIS)
 
             colunas_auth_user_ausentes = [
                 coluna for coluna in COLUNAS_AUTH_USER_FULLNAME if coluna not in df.columns
@@ -649,6 +822,8 @@ class MigracoesSemTratamentoApp(tk.Tk):
                     f"Pre-visualizacao OK - {len(df)} linhas. "
                     f"{len(insert_columns)} colunas prontas para envio."
                 )
+                if linhas_cnj_ignoradas:
+                    self.lbl_status["text"] += f" {len(linhas_cnj_ignoradas)} linha(s) ignorada(s) por CNJ vazio."
                 if clientes_sem_grupo:
                     self.lbl_status["text"] += f" {len(clientes_sem_grupo)} cliente(s) sem grupo."
                 if campos_sem_id:
@@ -720,10 +895,59 @@ class MigracoesSemTratamentoApp(tk.Tk):
             )
             return
 
-        df_envio = self.state.df[self.state.insert_columns].copy()
+        df_envio, colunas_envio = preparar_campos_submit(self.state.df, self.state.insert_columns)
+        df_envio = df_envio[colunas_envio].copy()
+        if "cnj" not in df_envio.columns:
+            messagebox.showerror("Envio bloqueado", "Coluna obrigatoria 'cnj' nao encontrada.")
+            self.lbl_status["text"] = "Envio bloqueado por erro no campo cnj."
+            return
+
+        linhas_admin_sem_cnj = linhas_administrativas_sem_cnj(df_envio)
+        if linhas_admin_sem_cnj:
+            exibicao_linhas = ", ".join(map(str, linhas_admin_sem_cnj[:10]))
+            if len(linhas_admin_sem_cnj) > 10:
+                exibicao_linhas += " ..."
+            messagebox.showerror(
+                "Envio bloqueado",
+                "Processos com natureza 'Administrativa' devem ter o campo 'cnj' preenchido. "
+                f"Linhas com erro: {exibicao_linhas}.",
+            )
+            self.lbl_status["text"] = "Envio bloqueado por CNJ vazio em natureza Administrativa."
+            return
+
+        df_envio, linhas_cnj_ignoradas = filtrar_linhas_sem_cnj(df_envio)
+        if df_envio.empty:
+            messagebox.showwarning(
+                "Envio bloqueado",
+                "Nenhuma linha valida restou para envio apos ignorar os registros com 'cnj' vazio.",
+            )
+            self.lbl_status["text"] = "Nenhuma linha valida para envio."
+            return
+
+        if "tipoPoloCliente" not in df_envio.columns:
+            messagebox.showerror("Envio bloqueado", "Coluna obrigatoria 'Tipo Cliente' nao encontrada.")
+            self.lbl_status["text"] = "Envio bloqueado por erro na coluna Tipo Cliente."
+            return
+
+        df_envio, ok_tipo_polo_cliente, linhas_invalidas_tipo_cliente, valores_invalidos_tipo_cliente = validar_tipo_polo_cliente(df_envio)
+        if not ok_tipo_polo_cliente:
+            exibicao_linhas = ", ".join(map(str, linhas_invalidas_tipo_cliente[:10]))
+            if len(linhas_invalidas_tipo_cliente) > 10:
+                exibicao_linhas += " ..."
+            messagebox.showerror(
+                "Envio bloqueado",
+                "A coluna 'Tipo Cliente' deve conter apenas 'Ativo' ou 'Passivo'. "
+                f"Linhas com erro: {exibicao_linhas}. "
+                f"Valores encontrados: {', '.join(valores_invalidos_tipo_cliente[:10])}",
+            )
+            self.lbl_status["text"] = "Envio bloqueado por erro na coluna Tipo Cliente."
+            return
+
         self.pb["value"] = 0
         self.pb["maximum"] = len(df_envio)
         self.lbl_status["text"] = "Enviando ao banco..."
+        if linhas_cnj_ignoradas:
+            self.lbl_status["text"] += f" Ignorando {len(linhas_cnj_ignoradas)} linha(s) sem CNJ."
 
         def progress_cb(done: int, total: int):
             self.after(0, lambda: self._update_progress(done, total))
@@ -731,7 +955,7 @@ class MigracoesSemTratamentoApp(tk.Tk):
         def worker():
             total, error_msg = inserir_em_lotes_sem_tratamento(
                 df=df_envio,
-                colunas=self.state.insert_columns,
+                colunas=colunas_envio,
                 lote=500,
                 progress_cb=progress_cb,
             )

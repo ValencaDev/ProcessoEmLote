@@ -84,7 +84,8 @@ colunas_thproc = [
     'parecerDoProcesso', 'data_hora_submit', 'data_hora_export',
     'usuario_submit_id', 'usuario_export_id', 'valorFinalCausa',
     'tipoPoloCliente', 'data_resultado', 'tipo_resultado',
-    'descricao_resultado', 'Adv_parte_contraria', 'codnatureza',
+    'descricao_resultado', 'Adv_parte_contraria', 'advogadoParteContraria',
+    'dataCitacao', 'codnatureza',
     'codparte_polo_ativo', 'codpolo_cliente', 'codsistema_externo',
     'codstatus', 'codfase', 'codespecialidade', 'codorgao', 'codmateria',
     'codtipo_rito', 'codcomarca', 'codparte_polo_passivo', 'codunidade',
@@ -606,6 +607,8 @@ OPTIONAL_INPUT_DEFAULTS = {
     'estado': '',
     'materia': '',
     'tipoInstancia': '',
+    'advogadoParteContraria': None,
+    'dataCitacao': None,
 }
 
 OPTIONAL_INPUT_COLUMNS = set(OPTIONAL_INPUT_DEFAULTS)
@@ -617,10 +620,10 @@ CAMPOS_TEXTO_255 = [
     'fase','status','carteira','prioridadeDe','tipoEvento','solicitanteEvento','responsavelEvento',
     'corresponsavel','sistemaExterno','tipoAndamento','solicitanteAndamento','responsavelAndamento',
     'corresponsavelAndamento','descricaoObjeto','escritorioCredenciado','tipoPoloCliente','tipo_resultado',
-    'Adv_parte_contraria'
+    'Adv_parte_contraria','advogadoParteContraria'
 ]
 
 COLUNAS_DATA = [
     'dataDistribuicao','dataInstancia','dataFase','dataStatus','dataEvento','dataValorProvisionado',
-    'dataAndamento','dataContratacao','data_resultado'
+    'dataAndamento','dataContratacao','data_resultado','dataCitacao'
 ]

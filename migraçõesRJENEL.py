@@ -40,7 +40,8 @@ colunas_thproc = [
     'parecerDoProcesso', 'data_hora_submit', 'data_hora_export',
     'usuario_submit_id', 'usuario_export_id', 'valorFinalCausa',
     'tipoPoloCliente', 'data_resultado', 'tipo_resultado',
-    'descricao_resultado', 'Adv_parte_contraria', 'codnatureza',
+    'descricao_resultado', 'Adv_parte_contraria', 'advogadoParteContraria',
+    'dataCitacao', 'codnatureza',
     'codparte_polo_ativo', 'codpolo_cliente', 'codsistema_externo',
     'codstatus', 'codfase', 'codespecialidade', 'codorgao', 'codmateria',
     'codtipo_rito', 'codcomarca', 'codparte_polo_passivo', 'codunidade',
@@ -361,7 +362,7 @@ if __name__ == "__main__":
                 'dataDistribuicao', 'dataInstancia', 'dataFase', 'dataStatus',
                 'dataEvento',
                 'dataValorProvisionado', 'dataAndamento', 'dataContratacao',
-                'data_resultado'
+                'data_resultado', 'dataCitacao'
             ]
 
 
@@ -374,11 +375,14 @@ if __name__ == "__main__":
                 'responsavelEvento', 'corresponsavel', 'sistemaExterno',
                 'tipoAndamento', 'solicitanteAndamento', 'responsavelAndamento',
                 'corresponsavelAndamento', 'descricaoObjeto', 'escritorioCredenciado',
-                'tipoPoloCliente', 'tipo_resultado', 'Adv_parte_contraria'
+                'tipoPoloCliente', 'tipo_resultado', 'Adv_parte_contraria',
+                'advogadoParteContraria'
             ]
 
             for campo in campos_texto_100:
                 if campo in df.columns:
+                    if campo == 'natureza':
+                        df[campo] = df[campo].astype(str).str.rstrip()
                     df[campo] = df[campo].astype(str).str.slice(0, 100)
                     
             for col in colunas_data:
