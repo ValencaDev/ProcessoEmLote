@@ -675,7 +675,21 @@ COMPANY_PRESETS: Dict[str, Dict[str, object]] = {
                 'solicitanteEvento': '247',
                 'tipoAndamento': 'Não Informado',
                 'responsavelEvento': '450',
-            }
+            },
+    'EQUIPE CIVEL':{
+                    'nomegrupo_id': '42',
+                    'prioridadeDe':'33',
+                    'solicitanteAndamento': '33',
+                    'responsavelAndamento': '33',
+                    'corresponsavelAndamento': '33',
+                    'corresponsavel': '25',
+                    'codlote': f'EQUIPE CIVEL{TODAY_STR}',
+                    'carteira': '42',
+                    'tipoEvento': '1245',
+                    'solicitanteEvento': '33',
+                    'tipoAndamento': 'Não Informado',
+                    'responsavelEvento': '33',
+                }
 
 }
 
