@@ -1275,6 +1275,7 @@ class AppState:
     path: Optional[str] = None
     df: Optional[pd.DataFrame] = None
     empresa: str = ''
+    natureza: str = 'Judicial'
     sheet_name: Optional[str] = None
     missing_columns: List[str] = field(default_factory=list)
     carteira_id: Optional[int] = None
@@ -1317,9 +1318,19 @@ class MigracoesApp(tk.Tk):
         )
         self.cmb_empresa.grid(row=1, column=3, sticky='w', padx=5, pady=(8, 0))
 
+        ttk.Label(top, text='Natureza:').grid(row=2, column=0, sticky='w', pady=(8, 0))
+        self.cmb_natureza = ttk.Combobox(
+            top,
+            values=['Judicial', 'Administrativa'],
+            state='readonly',
+            width=30
+        )
+        self.cmb_natureza.grid(row=2, column=1, sticky='w', pady=(8, 0))
+        self.cmb_natureza.set(self.state.natureza)
+
         # Botões
         btns = ttk.Frame(top)
-        btns.grid(row=2, column=0, columnspan=4, sticky='w', pady=10)
+        btns.grid(row=3, column=0, columnspan=4, sticky='w', pady=10)
         ttk.Button(btns, text='Testar Conexão', command=self.on_test_conn).pack(side='left')
         ttk.Button(btns, text='Pré-visualizar', command=self.on_preview).pack(side='left', padx=6)
         ttk.Button(btns, text='Enviar ao Banco', command=self.on_send).pack(side='left')
@@ -1361,6 +1372,15 @@ class MigracoesApp(tk.Tk):
 
     def _formatar_item_combo(self, item_id: int, nome: str) -> str:
         return f'{nome.strip()} [id {item_id}]'
+
+    def _natureza_selecionada(self) -> str:
+        natureza = self.cmb_natureza.get().strip()
+        return natureza if natureza in ('Administrativa', 'Judicial') else ''
+
+    def _aplicar_natureza_selecionada(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        df['natureza'] = self.state.natureza
+        return df
 
     def _load_carteiras_async(self):
         self.lbl_status['text'] = 'Carregando carteiras...'
@@ -1825,10 +1845,16 @@ class MigracoesApp(tk.Tk):
         if not empresa:
             messagebox.showwarning('Atenção', 'Selecione a empresa para aplicar os presets.')
             return
+        natureza = self._natureza_selecionada()
+        if not natureza:
+            messagebox.showwarning('Atencao', 'Selecione a natureza do processo.')
+            return
         try:
             self.lbl_status['text'] = 'Lendo planilha...'
             df = pd.read_excel(self.state.path, sheet_name=sheet)
             df = df.rename(columns=RENAME_MAP)
+            self.state.natureza = natureza
+            df = self._aplicar_natureza_selecionada(df)
 
             if usa_fluxo_regular(empresa):
                 df = preparar_dataframe(df, empresa)
@@ -1932,7 +1958,13 @@ class MigracoesApp(tk.Tk):
             messagebox.showwarning('Atenção', 'Faça a pré-visualização antes de enviar.')
             return
 
-        df = self.state.df.copy()
+        natureza = self._natureza_selecionada()
+        if not natureza:
+            messagebox.showwarning('Atencao', 'Selecione a natureza do processo.')
+            return
+
+        self.state.natureza = natureza
+        df = self._aplicar_natureza_selecionada(self.state.df)
         registros = montar_registros(df)
 
         self.pb['value'] = 0
@@ -1965,7 +1997,13 @@ class MigracoesApp(tk.Tk):
             ):
                 return
 
-        df = self.state.df.copy()
+        natureza = self._natureza_selecionada()
+        if not natureza:
+            messagebox.showwarning('Atencao', 'Selecione a natureza do processo.')
+            return
+
+        self.state.natureza = natureza
+        df = self._aplicar_natureza_selecionada(self.state.df)
 
         if usa_fluxo_regular(self.state.empresa):
             registros = montar_registros(
