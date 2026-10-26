@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from pel_validacao import converter_datas
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -126,10 +127,8 @@ def formatar_datas_para_envio(df: pd.DataFrame) -> pd.DataFrame:
         if coluna not in df_formatado.columns:
             continue
 
-        serie = pd.to_datetime(df_formatado[coluna], errors="coerce", dayfirst=True)
-        df_formatado[coluna] = pd.Series(pd.NA, index=df_formatado.index, dtype="string")
-        mascara_valida = serie.notna()
-        df_formatado.loc[mascara_valida, coluna] = serie.loc[mascara_valida].dt.strftime("%Y-%m-%d")
+        serie = converter_datas(df_formatado[coluna], coluna)
+        df_formatado[coluna] = serie.map(lambda valor: None if pd.isna(valor) else valor.isoformat())
 
     return df_formatado
 
@@ -500,11 +499,11 @@ def inserir_em_lotes_sem_tratamento(
         for inicio in range(0, len(registros), lote):
             chunk = registros[inicio:inicio + lote]
             cur.executemany(sql, chunk)
-            conn.commit()
             total += cur.rowcount or 0
             if progress_cb:
                 progress_cb(min(inicio + len(chunk), len(registros)), len(registros))
 
+        conn.commit()
         return total, None
     except Exception as err:
         if conn:
@@ -895,7 +894,12 @@ class MigracoesSemTratamentoApp(tk.Tk):
             )
             return
 
-        df_envio, colunas_envio = preparar_campos_submit(self.state.df, self.state.insert_columns)
+        try:
+            df_envio, colunas_envio = preparar_campos_submit(self.state.df, self.state.insert_columns)
+        except ValueError as erro:
+            messagebox.showerror("Envio bloqueado", str(erro))
+            self.lbl_status["text"] = "Corrija as datas da planilha antes de enviar."
+            return
         df_envio = df_envio[colunas_envio].copy()
         if "cnj" not in df_envio.columns:
             messagebox.showerror("Envio bloqueado", "Coluna obrigatoria 'cnj' nao encontrada.")

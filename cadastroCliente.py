@@ -176,7 +176,7 @@ def formatar_cnpj(cnpj: str) -> str:
     return f"{d[0:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:14]}"
 
 def _calc_dv(base: str) -> int:
-    pesos = list(range(len(base) - 7, 1, -1))
+    pesos = list(range(len(base) - 7, 1, -1)) + list(range(9, 1, -1))
     soma = sum(int(d) * p for d, p in zip(base, pesos))
     r = 11 - (soma % 11)
     return 0 if r >= 10 else r
@@ -269,19 +269,21 @@ def obter_id_grupo_por_nome(cursor, codequipe: int, nome_grupo: str) -> Optional
     row = cursor.fetchone()
     return int(row[0]) if row else None
 
-def obter_ultimo_id_grupo(cursor, codequipe: int) -> Optional[int]:
+def inserir_grupo(cursor, codequipe: int, nome_grupo: str) -> int:
+    cursor.execute("SHOW COLUMNS FROM thgrupocli LIKE 'id'")
+    coluna = cursor.fetchone()
+    if not coluna or 'auto_increment' not in str(coluna[5]).lower():
+        raise RuntimeError(
+            'O campo thgrupocli.id precisa de AUTO_INCREMENT para criar grupos com segurança. '
+            'Solicite a adequação do esquema ao administrador do banco.'
+        )
     cursor.execute(
-        "SELECT id FROM thgrupocli WHERE codequipe = %s ORDER BY id DESC LIMIT 1",
-        (codequipe,)
+        "INSERT INTO thgrupocli (codequipe, nomegrupo) VALUES (%s, %s)",
+        (codequipe, nome_grupo.strip())
     )
-    row = cursor.fetchone()
-    return int(row[0]) if row else None
-
-def inserir_grupo(cursor, novo_id: int, codequipe: int, nome_grupo: str):
-    cursor.execute(
-        "INSERT INTO thgrupocli (id, codequipe, nomegrupo) VALUES (%s, %s, %s)",
-        (novo_id, codequipe, nome_grupo.strip())
-    )
+    if not cursor.lastrowid:
+        raise RuntimeError('O banco não retornou o ID do grupo criado.')
+    return int(cursor.lastrowid)
 
 def inserir_cliente(cursor, id_grupo: int, nome_cliente: str, cnpj: str):
     doc_fmt = formatar_cnpj(cnpj)
@@ -291,10 +293,10 @@ def inserir_cliente(cursor, id_grupo: int, nome_cliente: str, cnpj: str):
     )
 
 def cadastrar_cliente(nome_equipe: str, nome_grupo: str, nome_cliente: str, cnpj: str) -> Tuple[bool, str]:
-    if not (nome_equipe and nome_grupo and nome_cliente and cnpj):
+    if not all(valor and valor.strip() for valor in (nome_equipe, nome_grupo, nome_cliente, cnpj)):
         return False, "Preencha todos os campos."
-   # if not validar_cnpj(cnpj):
-   #     return False, "CNPJ inválido (verifique dígitos)."
+    if not validar_cnpj(cnpj):
+        return False, "CNPJ inválido (verifique os dígitos)."
 
     conn, cur, err = conectar_ao_mysql()
     if not conn:
@@ -316,9 +318,7 @@ def cadastrar_cliente(nome_equipe: str, nome_grupo: str, nome_cliente: str, cnpj
                 f"Grupo={nome_grupo} (id {id_grupo})"
             )
         else:
-            ultimo = obter_ultimo_id_grupo(cur, codequipe)
-            novo_id = (ultimo or 0) + 1
-            inserir_grupo(cur, novo_id, codequipe, nome_grupo)
+            novo_id = inserir_grupo(cur, codequipe, nome_grupo)
             inserir_cliente(cur, novo_id, nome_cliente, cnpj)
             conn.commit()
             return True, (
@@ -345,17 +345,12 @@ def atualizar_nome_cliente(cnpj: str, novo_nome: str) -> Tuple[bool, str, int]:
     Atualiza name_cli pelo CNPJ (aceita com/sem máscara).
     Retorna (ok, msg, rows_afetadas).
     """
-    if not (cnpj and novo_nome):
+    if not (cnpj and novo_nome and novo_nome.strip()):
         return False, "Informe CNPJ e Nome do cliente.", 0
-    # if not validar_cnpj(cnpj):
-    #    return False, "CNPJ inválido (verifique dígitos).", 0
+    if not validar_cnpj(cnpj):
+        return False, "CNPJ inválido (verifique os dígitos).", 0
 
-    # 1. Remove os caracteres de máscara do CNPJ de entrada
     d_apenas_digitos = apenas_digitos(cnpj)
-
-    # 2. CORREÇÃO: Cria a string de busca com curingas
-    # Usa f-string para criar o padrão LIKE '%%' + digitos + '%%'
-    cnpj_like_pattern = f"%{d_apenas_digitos}%"
 
     conn, cur, err = conectar_ao_mysql()
     if not conn:
@@ -365,16 +360,14 @@ def atualizar_nome_cliente(cnpj: str, novo_nome: str) -> Tuple[bool, str, int]:
         sql = """
         UPDATE thcliente
         SET name_cli = %s
-        WHERE REPLACE(REPLACE(REPLACE(cnpj,'.',''),'-',''),'/','') LIKE %s
+        WHERE REPLACE(REPLACE(REPLACE(cnpj,'.',''),'-',''),'/','') = %s
         """
-        # Passa a string com o padrão LIKE como segundo parâmetro
-        cur.execute(sql, (novo_nome.strip().upper(), cnpj_like_pattern))
+        cur.execute(sql, (novo_nome.strip().upper(), d_apenas_digitos))
         conn.commit()
         rows = cur.rowcount or 0
 
-        # A mensagem de "nenhum registro encontrado" foi ajustada para refletir a busca parcial
         if rows == 0:
-            return False, f"Nenhum registro encontrado que contenha a sequência '{d_apenas_digitos}' no CNPJ.", 0
+            return True, "Nenhum nome alterado: CNPJ não encontrado ou nome já cadastrado.", 0
         return True, f"Nome atualizado com sucesso ({rows} registro(s)).", rows
 
     except Exception as e:

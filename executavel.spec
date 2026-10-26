@@ -9,7 +9,7 @@ a = Analysis(
     ['executavel.py'],
     pathex=[],
     binaries=[],
-    datas=[('.env', '.')],
+    datas=[],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

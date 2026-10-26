@@ -6,8 +6,13 @@ from typing import List, Optional, Sequence, Tuple
 
 import mysql.connector
 import pandas as pd
+from pel_validacao import converter_moeda, converter_datas
 
-from pel_config import LAST_ENV_PATH, colunas_thproc, obter_config_banco
+from pel_config import (
+    LAST_ENV_PATH, colunas_thproc, obter_config_banco,
+    CAMPOS_TEXTO_255, COLUNAS_DATA, COMMON_DEFAULTS, COMPANY_PRESETS,
+    EMPRESA_REGULAR, OPTIONAL_INPUT_COLUMNS, OPTIONAL_INPUT_DEFAULTS,
+)
 
 def teste_tcp(host: str, port: int, timeout: float = 3.0) -> Tuple[bool, str]:
     try:
@@ -249,7 +254,7 @@ def formatar_datas_e_numeros(df: pd.DataFrame) -> pd.DataFrame:
     # Monetários
     for campo in ['valorFinalCausa','valorCausa','valorProvisionado']:
         if campo in df.columns:
-            df[campo] = pd.to_numeric(df[campo], errors='coerce').fillna(0.0)
+            df[campo] = converter_moeda(df[campo], campo)
 
     if 'numeroUnidade' in df.columns:
         df['numeroUnidade'] = pd.to_numeric(df['numeroUnidade'], errors='coerce')
@@ -257,9 +262,7 @@ def formatar_datas_e_numeros(df: pd.DataFrame) -> pd.DataFrame:
     # Datas
     for col in COLUNAS_DATA:
         if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True)
-            df[col] = df[col].fillna(pd.to_datetime(date.today()))
-            df[col] = df[col].dt.date
+            df[col] = converter_datas(df[col], col)
 
     # Limite de 255 chars
     for campo in CAMPOS_TEXTO_255:
@@ -284,9 +287,7 @@ def formatar_datas_e_numeros(df: pd.DataFrame) -> pd.DataFrame:
 
     # Datas com hora → manter só data se a coluna existir
     if 'data_hora_submit' in df.columns:
-        df['data_hora_submit'] = pd.to_datetime(df['data_hora_submit'], errors='coerce', dayfirst=True)
-        df['data_hora_submit'] = df['data_hora_submit'].fillna(pd.to_datetime(date.today()))
-        df['data_hora_submit'] = df['data_hora_submit'].dt.date
+        df['data_hora_submit'] = converter_datas(df['data_hora_submit'], 'data_hora_submit', manter_hora=True)
 
     # CNJ como string
     if 'cnj' in df.columns:
@@ -512,10 +513,10 @@ def inserir_em_lotes(
         for i in range(0, len(registros_limpos), lote):
             chunk = registros_limpos[i:i + lote]
             cur.executemany(sql, chunk)
-            conn.commit()
             total += cur.rowcount or 0
             if progress_cb:
                 progress_cb(min(total, len(registros_limpos)), len(registros_limpos))
+        conn.commit()
         return total, cnjs_duplicados, None
     except Exception as err:
         if conn:

@@ -1,0 +1,7 @@
+mysql-connector-python
+numpy
+openpyxl
+pandas
+PyMySQL
+python-dotenv
+requests

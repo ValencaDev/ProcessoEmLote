@@ -3,6 +3,7 @@ import os
 import re
 import socket
 import threading
+import queue
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -11,6 +12,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 import pandas as pd
+from pel_validacao import converter_moeda, converter_datas
 from dotenv import load_dotenv
 import mysql.connector
 
@@ -689,7 +691,21 @@ COMPANY_PRESETS: Dict[str, Dict[str, object]] = {
                     'solicitanteEvento': '33',
                     'tipoAndamento': 'Não Informado',
                     'responsavelEvento': '33',
-                }
+                },
+        'IMOBILIARIO':{
+                            'nomegrupo_id': '43',
+                            'prioridadeDe':'197',
+                            'solicitanteAndamento': '197',
+                            'responsavelAndamento': '197',
+                            'corresponsavelAndamento': '197',
+                            'corresponsavel': '26',
+                            'codlote': f'IMOBILIARIO {TODAY_STR}',
+                            'carteira': '43',
+                            'tipoEvento': '684',
+                            'solicitanteEvento': '197',
+                            'tipoAndamento': 'Não Informado',
+                            'responsavelEvento': '197',
+                        }
 
 }
 
@@ -979,7 +995,7 @@ def formatar_datas_e_numeros(df: pd.DataFrame) -> pd.DataFrame:
     # Monetários
     for campo in ['valorFinalCausa','valorCausa','valorProvisionado']:
         if campo in df.columns:
-            df[campo] = pd.to_numeric(df[campo], errors='coerce').fillna(0.0)
+            df[campo] = converter_moeda(df[campo], campo)
 
     if 'numeroUnidade' in df.columns:
         df['numeroUnidade'] = pd.to_numeric(df['numeroUnidade'], errors='coerce')
@@ -987,9 +1003,7 @@ def formatar_datas_e_numeros(df: pd.DataFrame) -> pd.DataFrame:
     # Datas
     for col in COLUNAS_DATA:
         if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True)
-            df[col] = df[col].fillna(pd.to_datetime(date.today()))
-            df[col] = df[col].dt.date
+            df[col] = converter_datas(df[col], col)
 
     # Limite de 255 chars
     for campo in CAMPOS_TEXTO_255:
@@ -1012,11 +1026,9 @@ def formatar_datas_e_numeros(df: pd.DataFrame) -> pd.DataFrame:
     if 'responsavelEvento' in df.columns:
         df['responsavelEvento'] = df['responsavelEvento'].fillna('438')
 
-    # Datas com hora → manter só data se a coluna existir
+    # Preservar o horário de envio quando informado
     if 'data_hora_submit' in df.columns:
-        df['data_hora_submit'] = pd.to_datetime(df['data_hora_submit'], errors='coerce', dayfirst=True)
-        df['data_hora_submit'] = df['data_hora_submit'].fillna(pd.to_datetime(date.today()))
-        df['data_hora_submit'] = df['data_hora_submit'].dt.date
+        df['data_hora_submit'] = converter_datas(df['data_hora_submit'], 'data_hora_submit', manter_hora=True)
 
     # CNJ como string
     if 'cnj' in df.columns:
@@ -1119,7 +1131,7 @@ def validar_campo_natureza(df: pd.DataFrame) -> Tuple[bool, List[int], List[str]
     return len(linhas_invalidas) == 0, linhas_invalidas, valores_invalidos
 
 def validar_campo_cnj(df: pd.DataFrame) -> Tuple[bool, List[int]]:
-    """Valida CNJ: Administrativa aceita qualquer formato, exceto vazio."""
+    """Judicial exige numeração CNJ válida; Administrativa exige identificador."""
     if 'cnj' not in df.columns:
         return False, []
 
@@ -1127,10 +1139,51 @@ def validar_campo_cnj(df: pd.DataFrame) -> Tuple[bool, List[int]]:
     natureza = df['natureza'].fillna('').astype(str).str.strip() if 'natureza' in df.columns else pd.Series('', index=df.index)
     mascara_administrativa = natureza.eq('Administrativa')
     mascara_vazia = serie.isna() | serie.str.strip().fillna('').eq('')
-    mascara_espaco_inicial = serie.str.startswith((' ', '\t'), na=False)
-    mascara_invalida = (mascara_administrativa & mascara_vazia) | (~mascara_administrativa & mascara_espaco_inicial)
+    mascara_judicial_invalida = ~serie.map(cnj_judicial_valido)
+    mascara_invalida = (mascara_administrativa & mascara_vazia) | (~mascara_administrativa & mascara_judicial_invalida)
     linhas_invalidas = (df.index[mascara_invalida] + 2).tolist()
     return len(linhas_invalidas) == 0, linhas_invalidas
+
+def cnj_judicial_valido(valor) -> bool:
+    """Módulo 97 Base 10, conforme Anexo VIII da Resolução CNJ 65/2008.
+
+    https://atos.cnj.jus.br/atos/detalhar/119
+    """
+    if pd.isna(valor):
+        return False
+    texto = str(valor)
+    if not re.fullmatch(r'(?:[0-9]{20}|[0-9]{7}-[0-9]{2}\.[0-9]{4}\.[0-9]\.[0-9]{2}\.[0-9]{4})', texto):
+        return False
+    digitos = re.sub(r'\D', '', texto)
+    base = digitos[:7] + digitos[9:]
+    return int(digitos[7:9]) == 98 - (int(base + '00') % 97)
+
+
+def validar_processos(df: pd.DataFrame):
+    ok, linhas, valores = validar_campo_natureza(df)
+    if not ok:
+        raise ValueError(f"Natureza inválida nas linhas {linhas[:20]}: {', '.join(valores)}.")
+    ok, linhas = validar_campo_cnj(df)
+    if not ok:
+        raise ValueError(
+            f"CNJ inválido nas linhas {linhas[:20]}. Processos judiciais exigem 20 dígitos "
+            "e dígitos verificadores válidos (com ou sem máscara). "
+            "Processos administrativos exigem um identificador preenchido."
+        )
+
+
+def preparar_previa(caminho: str, aba, empresa: str, natureza: str):
+    df = pd.read_excel(caminho, sheet_name=aba, dtype=object).rename(columns=RENAME_MAP)
+    if df.columns.duplicated().any():
+        raise ValueError('A planilha contém colunas repetidas após o mapeamento dos cabeçalhos.')
+    df['natureza'] = natureza
+    validar_processos(df)
+    df = preparar_dataframe(df, empresa)
+    faltando = [] if usa_fluxo_regular(empresa) else validar_colunas_para_insercao(df)[1]
+    for coluna in colunas_thproc:
+        if coluna not in df.columns:
+            df[coluna] = OPTIONAL_INPUT_DEFAULTS.get(coluna)
+    return df, faltando
 
 def montar_registros(
     df: pd.DataFrame,
@@ -1242,10 +1295,10 @@ def inserir_em_lotes(
         for i in range(0, len(registros_limpos), lote):
             chunk = registros_limpos[i:i + lote]
             cur.executemany(sql, chunk)
-            conn.commit()
             total += cur.rowcount or 0
             if progress_cb:
                 progress_cb(min(total, len(registros_limpos)), len(registros_limpos))
+        conn.commit()
         return total, cnjs_duplicados, None
     except Exception as err:
         if conn:
@@ -1282,6 +1335,7 @@ class AppState:
     carteira_nome: str = ''
     grupo_id: Optional[int] = None
     grupo_nome: str = ''
+    preview_key: Optional[tuple] = None
 
 class MigracoesApp(tk.Tk):
     def __init__(self):
@@ -1291,7 +1345,13 @@ class MigracoesApp(tk.Tk):
         self.state = AppState()
         self.carteiras_map: Dict[str, int] = {}
         self.grupos_map: Dict[str, int] = {}
+        self._busy = False
+        self._sending = False
+        self._closing = False
+        self._events = queue.Queue()
         self.create_widgets()
+        self.protocol('WM_DELETE_WINDOW', self._on_close)
+        self.after(50, self._drain_events)
 
     # ---------- UI Builders ----------
     def create_widgets(self):
@@ -1300,9 +1360,10 @@ class MigracoesApp(tk.Tk):
 
         # Arquivo
         ttk.Label(top, text='Planilha:').grid(row=0, column=0, sticky='w')
-        self.ent_path = ttk.Entry(top, width=90)
+        self.ent_path = ttk.Entry(top, width=90, state='readonly')
         self.ent_path.grid(row=0, column=1, padx=5)
-        ttk.Button(top, text='Selecionar...', command=self.on_select_file).grid(row=0, column=2)
+        self.btn_file = ttk.Button(top, text='Selecionar...', command=self.on_select_file)
+        self.btn_file.grid(row=0, column=2)
 
         # Sheet/Empresa
         ttk.Label(top, text='Aba (sheet):').grid(row=1, column=0, sticky='w', pady=(8, 0))
@@ -1327,13 +1388,18 @@ class MigracoesApp(tk.Tk):
         )
         self.cmb_natureza.grid(row=2, column=1, sticky='w', pady=(8, 0))
         self.cmb_natureza.set(self.state.natureza)
+        for combo in (self.cmb_sheet, self.cmb_empresa, self.cmb_natureza):
+            combo.bind('<<ComboboxSelected>>', self._invalidate_preview)
 
         # Botões
         btns = ttk.Frame(top)
         btns.grid(row=3, column=0, columnspan=4, sticky='w', pady=10)
-        ttk.Button(btns, text='Testar Conexão', command=self.on_test_conn).pack(side='left')
-        ttk.Button(btns, text='Pré-visualizar', command=self.on_preview).pack(side='left', padx=6)
-        ttk.Button(btns, text='Enviar ao Banco', command=self.on_send).pack(side='left')
+        self.btn_test = ttk.Button(btns, text='Testar Conexão', command=self.on_test_conn)
+        self.btn_test.pack(side='left')
+        self.btn_preview = ttk.Button(btns, text='Pré-visualizar', command=self.on_preview)
+        self.btn_preview.pack(side='left', padx=6)
+        self.btn_send = ttk.Button(btns, text='Enviar ao Banco', command=self.on_send, state='disabled')
+        self.btn_send.pack(side='left')
 
         # Árvore de preview
         self.tree = ttk.Treeview(self, columns=('info',), show='headings')
@@ -1348,27 +1414,109 @@ class MigracoesApp(tk.Tk):
         self.pb.pack(side='right')
 
     # ---------- Handlers ----------
+    def _set_busy(self, busy: bool):
+        self._busy = busy
+        for botao in (self.btn_file, self.btn_test, self.btn_preview):
+            botao.configure(state='disabled' if busy else 'normal')
+        for combo in (self.cmb_sheet, self.cmb_empresa, self.cmb_natureza):
+            combo.configure(state='disabled' if busy else 'readonly')
+        pode_enviar = not busy and self.state.df is not None and not self.state.df.empty
+        self.btn_send.configure(state='normal' if pode_enviar else 'disabled')
+
+    def _invalidate_preview(self, _event=None):
+        self.state.df = None
+        self.state.preview_key = None
+        self.state.missing_columns = []
+        self.tree.delete(*self.tree.get_children())
+        self.btn_send.configure(state='disabled')
+        self.lbl_status['text'] = 'Faça uma nova pré-visualização antes de enviar.'
+
+    def _context_key(self):
+        caminho = self.state.path
+        try:
+            arquivo = Path(caminho).stat() if caminho else None
+            versao = (arquivo.st_mtime_ns, arquivo.st_size) if arquivo else None
+        except OSError:
+            versao = None
+        return (caminho, self.cmb_sheet.get(), self.cmb_empresa.get(),
+                self._natureza_selecionada(), versao)
+
+    def _run_background(self, work, finish, fail):
+        # A thread de trabalho só acessa dados; o Tkinter consome os resultados.
+        def worker():
+            try:
+                resultado = work()
+            except Exception as erro:
+                self._events.put((fail, (str(erro),)))
+            else:
+                self._events.put((finish, (resultado,)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _drain_events(self):
+        if self._closing:
+            return
+        try:
+            for _ in range(100):
+                try:
+                    callback, args = self._events.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    callback(*args)
+                except Exception:
+                    self._sending = False
+                    self._set_busy(False)
+                    self.report_callback_exception(*sys.exc_info())
+        finally:
+            if not self._closing:
+                self.after(50, self._drain_events)
+
+    def _on_close(self):
+        if self._sending:
+            self.lbl_status['text'] = 'Aguarde a conclusão do envio antes de fechar.'
+            return
+        self._closing = True
+        self.destroy()
+
     def on_select_file(self):
+        if self._busy:
+            return
         path = filedialog.askopenfilename(
             title='Selecione a planilha Excel',
             filetypes=[('Arquivos Excel', '*.xlsx *.xls')]
         )
         if not path:
             return
+        self._invalidate_preview()
         self.state.path = path
-        self.state.df = None
-        self.state.missing_columns = []
+        self.state.sheet_name = None
+        self.ent_path.configure(state='normal')
         self.ent_path.delete(0, tk.END)
         self.ent_path.insert(0, path)
-        try:
-            xl = pd.ExcelFile(path)
-            sheets = xl.sheet_names
+        self.ent_path.configure(state='readonly')
+        self.cmb_sheet.set('')
+        self.cmb_sheet['values'] = []
+        self._set_busy(True)
+        self.lbl_status['text'] = 'Lendo abas da planilha...'
+
+        def work():
+            with pd.ExcelFile(path) as arquivo:
+                return arquivo.sheet_names
+
+        def finish(sheets):
             self.cmb_sheet['values'] = sheets
             if sheets:
                 self.cmb_sheet.set(sheets[0])
                 self.state.sheet_name = sheets[0]
-        except Exception as e:
-            messagebox.showerror('Erro', f'Não foi possível ler as abas:\n{e}')
+            self._set_busy(False)
+            self.lbl_status['text'] = 'Planilha selecionada. Faça a pré-visualização.'
+
+        def fail(mensagem):
+            self._set_busy(False)
+            self.lbl_status['text'] = 'Falha ao ler a planilha.'
+            messagebox.showerror('Erro', f'Não foi possível ler as abas:\n{mensagem}')
+
+        self._run_background(work, finish, fail)
 
     def _formatar_item_combo(self, item_id: int, nome: str) -> str:
         return f'{nome.strip()} [id {item_id}]'
@@ -1684,33 +1832,14 @@ class MigracoesApp(tk.Tk):
         if self.alt_state.df is None or self.alt_state.df.empty:
             messagebox.showwarning('Atenção', 'Faça a pré-visualização antes de enviar.', parent=self.alt_window)
             return
-
-        df = self.alt_state.df.copy()
-        registros = montar_registros(df)
-
-        self.alt_pb['value'] = 0
-        self.alt_pb['maximum'] = len(registros)
-        self.alt_lbl_status['text'] = 'Enviando ao banco...'
-
-        def progress_cb(done, total):
-            self.after(0, lambda: self._alt_update_progress(done, total))
-
-        def worker():
-            total, cnjs_duplicados, error_msg = inserir_em_lotes(
-                registros,
-                lote=500,
-                progress_cb=progress_cb
-            )
-            self.after(0, lambda: self._alt_finish_send(df, total, cnjs_duplicados, error_msg))
-
-        threading.Thread(target=worker, daemon=True).start()
+        self._start_send(self.alt_state.df, alternativa=True)
 
     def _render_preview_to_tree(self, tree: ttk.Treeview, df: pd.DataFrame, max_rows: int = 200):
         for col in tree['columns']:
             tree.heading(col, text='')
         tree.delete(*tree.get_children())
 
-        show_df = df.copy().head(max_rows)
+        show_df = df.head(max_rows)
         cols = list(show_df.columns)
         tree['columns'] = cols
         for c in cols:
@@ -1750,24 +1879,36 @@ class MigracoesApp(tk.Tk):
         messagebox.showinfo('Finalizado', f'Inseridos {total} registros.', parent=self.alt_window)
 
     def on_test_conn(self):
-        cfg = obter_config_banco()
-        messagebox.showinfo(
-            "DEBUG",
-            f"Host={cfg['host']}\nUser={cfg['user']}\nDB={cfg['database']}\n"
-            f"Timeout={cfg.get('timeout', 15)}s\n.env usado: {LAST_ENV_PATH or 'NÃO ENCONTRADO'}"
-        )
-
+        if self._busy:
+            return
+        self._set_busy(True)
         self.lbl_status['text'] = 'Testando conexão...'
-        self.update_idletasks()
 
-        def worker():
+        def work():
+            conn = cur = None
             try:
                 conn, cur = conectar_ao_mysql()
-                self.after(0, lambda: self._finish_test_conn(conn, cur, None))
-            except Exception as e:
-                self.after(0, lambda: self._finish_test_conn(None, None, str(e)))
+                cur.execute('SELECT 1')
+                cur.fetchone()
+            finally:
+                try:
+                    if cur is not None:
+                        cur.close()
+                finally:
+                    if conn is not None:
+                        conn.close()
 
-        threading.Thread(target=worker, daemon=True).start()
+        def finish(_resultado):
+            self._set_busy(False)
+            self.lbl_status['text'] = 'Conexão com MySQL OK.'
+            messagebox.showinfo('Conexão', 'Conexão com MySQL OK!')
+
+        def fail(mensagem):
+            self._set_busy(False)
+            self.lbl_status['text'] = 'Falha na conexão.'
+            messagebox.showerror('Erro MySQL', mensagem)
+
+        self._run_background(work, finish, fail)
 
     def _finish_test_conn(self, conn, cur, error_msg: Optional[str]):
         if error_msg:
@@ -1837,105 +1978,51 @@ class MigracoesApp(tk.Tk):
             messagebox.showerror('Erro', f'Falha ao pré-visualizar:\n{e}')
 
     def on_preview(self):
+        if self._busy:
+            return
+        self._invalidate_preview()
         if not self.state.path:
             messagebox.showwarning('Atenção', 'Selecione uma planilha primeiro.')
             return
-        sheet = self.cmb_sheet.get() or 0
-        empresa = self.cmb_empresa.get()
-        if not empresa:
-            messagebox.showwarning('Atenção', 'Selecione a empresa para aplicar os presets.')
+        chave = self._context_key()
+        caminho, aba, empresa, natureza, _versao = chave
+        if not empresa or not natureza or not aba:
+            messagebox.showwarning('Atenção', 'Selecione a aba, a empresa e a natureza do processo.')
             return
-        natureza = self._natureza_selecionada()
-        if not natureza:
-            messagebox.showwarning('Atencao', 'Selecione a natureza do processo.')
-            return
-        try:
-            self.lbl_status['text'] = 'Lendo planilha...'
-            df = pd.read_excel(self.state.path, sheet_name=sheet)
-            df = df.rename(columns=RENAME_MAP)
-            self.state.natureza = natureza
-            df = self._aplicar_natureza_selecionada(df)
+        self._set_busy(True)
+        self.pb.configure(mode='indeterminate')
+        self.pb.start(20)
+        self.lbl_status['text'] = 'Lendo e validando a planilha...'
 
-            if usa_fluxo_regular(empresa):
-                df = preparar_dataframe(df, empresa)
-                self.state.missing_columns = []
-                for col in colunas_thproc:
-                    if col not in df.columns:
-                        df[col] = None
-
-                self.state.df = df
-                self.state.empresa = empresa
-                self._render_preview(df)
-                self.lbl_status['text'] = f'PrÃ©-visualizaÃ§Ã£o OK â€“ {len(df)} linhas.'
+        def finish(resultado):
+            self.pb.stop()
+            self.pb.configure(mode='determinate', value=0)
+            if chave != self._context_key():
+                self._invalidate_preview()
+                self._set_busy(False)
                 return
-
-            # Validação obrigatória do campo natureza
-            ok_natureza, linhas_invalidas, valores_invalidos = validar_campo_natureza(df)
-            if not ok_natureza:
-                msg = (
-                    "A planilha não pode ser processada.\n\n"
-                    "O campo 'natureza' deve conter apenas os valores:\n"
-                    " - Judicial\n"
-                    " - Administrativa\n\n"
-                    f"Valores inválidos encontrados: {', '.join(valores_invalidos)}\n"
-                )
-
-                if linhas_invalidas:
-                    msg += f"Linhas com erro: {', '.join(map(str, linhas_invalidas[:20]))}"
-                    if len(linhas_invalidas) > 20:
-                        msg += " ..."
-
-                messagebox.showerror('Validação da Natureza', msg)
-                self.lbl_status['text'] = 'Erro de validação na coluna natureza.'
-                return
-
-            ok_cnj, linhas_cnj_invalidas = validar_campo_cnj(df)
-            if not ok_cnj:
-                msg = (
-                    "A planilha não pode ser processada.\n\n"
-                    "O campo 'cnj' não pode começar com espaço em branco.\n"
-                )
-                if linhas_cnj_invalidas:
-                    msg += f"\nLinhas com erro: {', '.join(map(str, linhas_cnj_invalidas[:20]))}"
-                    if len(linhas_cnj_invalidas) > 20:
-                        msg += " ..."
-
-                messagebox.showerror('Validação do CNJ', msg)
-                self.lbl_status['text'] = 'Erro de validação na coluna cnj.'
-                return
-
-            df = preparar_dataframe(df, empresa)
-
-            ok, faltando = validar_colunas_para_insercao(df)
-            self.state.missing_columns = faltando
-            if not ok:
-                messagebox.showwarning(
-                    'Colunas ausentes',
-                    f'Faltam colunas para o INSERT (irão como NULL na visualização):\n{faltando[:20]}...'
-                )
-
-            # Normalizações mínimas
-            if not usa_fluxo_regular(empresa):
-                if 'dataEvento' in df.columns:
-                    df['dataEvento'] = pd.to_datetime(df['dataEvento']).dt.date
-                if 'dataFase' in df.columns:
-                    df['dataFase'] = pd.to_datetime(df['dataFase']).dt.date
-                if 'dataContratacao' in df.columns:
-                    df['dataContratacao'] = pd.to_datetime(df['dataContratacao']).dt.date
-
-            # Garantir todas as colunas do INSERT
-            for col in colunas_thproc:
-                if col not in df.columns:
-                    df[col] = OPTIONAL_INPUT_DEFAULTS.get(col)
-
+            df, faltando = resultado
             self.state.df = df
             self.state.empresa = empresa
+            self.state.natureza = natureza
+            self.state.sheet_name = aba
+            self.state.missing_columns = faltando
+            self.state.preview_key = chave
             self._render_preview(df)
-            self.lbl_status['text'] = f'Pré-visualização OK – {len(df)} linhas.'
-        except KeyError as ke:
-            messagebox.showerror('Erro de coluna', f'Coluna ausente na planilha: {ke}')
-        except Exception as e:
-            messagebox.showerror('Erro', f'Falha ao pré-visualizar:\n{e}')
+            self._set_busy(False)
+            self.lbl_status['text'] = f'Pré-visualização OK — {len(df)} linhas (até 200 exibidas).'
+            if faltando:
+                messagebox.showwarning('Colunas ausentes', f'Estas colunas irão como NULL: {faltando[:20]}')
+
+        def fail(mensagem):
+            self.pb.stop()
+            self.pb.configure(mode='determinate', value=0)
+            self._invalidate_preview()
+            self._set_busy(False)
+            self.lbl_status['text'] = 'Falha na pré-visualização. Corrija a planilha.'
+            messagebox.showerror('Pré-visualização bloqueada', mensagem)
+
+        self._run_background(lambda: preparar_previa(caminho, aba, empresa, natureza), finish, fail)
 
     def _render_preview(self, df: pd.DataFrame, max_rows: int = 200):
         # Limpar
@@ -1943,7 +2030,7 @@ class MigracoesApp(tk.Tk):
             self.tree.heading(col, text='')
         self.tree.delete(*self.tree.get_children())
 
-        show_df = df.copy().head(max_rows)
+        show_df = df.head(max_rows)
         cols = list(show_df.columns)
         self.tree['columns'] = cols
         for c in cols:
@@ -1954,131 +2041,56 @@ class MigracoesApp(tk.Tk):
             self.tree.insert('', 'end', values=values)
 
     def on_send_importacao(self):
-        if self.state.df is None or self.state.df.empty:
-            messagebox.showwarning('Atenção', 'Faça a pré-visualização antes de enviar.')
-            return
-
-        natureza = self._natureza_selecionada()
-        if not natureza:
-            messagebox.showwarning('Atencao', 'Selecione a natureza do processo.')
-            return
-
-        self.state.natureza = natureza
-        df = self._aplicar_natureza_selecionada(self.state.df)
-        registros = montar_registros(df)
-
-        self.pb['value'] = 0
-        self.pb['maximum'] = len(registros)
-        self.lbl_status['text'] = 'Enviando ao banco...'
-
-        def progress_cb(done, total):
-            self.after(0, lambda: self._update_progress(done, total))
-
-        def worker():
-            total, cnjs_duplicados, error_msg = inserir_em_lotes(
-                registros,
-                lote=500,
-                progress_cb=progress_cb
-            )
-            self.after(0, lambda: self._finish_send(df, total, cnjs_duplicados, error_msg))
-
-        threading.Thread(target=worker, daemon=True).start()
+        self.on_send()
 
     def on_send(self):
+        if self._busy:
+            return
         if self.state.df is None or self.state.df.empty:
             messagebox.showwarning('Atenção', 'Faça a pré-visualização antes de enviar.')
             return
-
-        missing = self.state.missing_columns
-        if missing:
-            if not messagebox.askyesno(
-                'Colunas faltando',
-                f'Estas colunas não estão presentes e irão como NULL: {missing[:20]}...\nDeseja continuar?'
-            ):
-                return
-
-        natureza = self._natureza_selecionada()
-        if not natureza:
-            messagebox.showwarning('Atencao', 'Selecione a natureza do processo.')
+        if self.state.preview_key != self._context_key():
+            self._invalidate_preview()
+            messagebox.showwarning('Prévia desatualizada', 'A planilha ou as opções mudaram. Faça uma nova pré-visualização.')
             return
-
-        self.state.natureza = natureza
-        df = self._aplicar_natureza_selecionada(self.state.df)
-
-        if usa_fluxo_regular(self.state.empresa):
-            registros = montar_registros(
-                df,
-                usar_defaults_opcionais=False,
-                colunas=colunas_thproc_regular
-            )
-
-            self.pb['value'] = 0
-            self.pb['maximum'] = len(registros)
-            self.lbl_status['text'] = 'Enviando ao banco...'
-
-            def progress_cb(done, total):
-                self.after(0, lambda: self._update_progress(done, total))
-
-            def worker():
-                total, cnjs_duplicados, error_msg = inserir_em_lotes(
-                    registros,
-                    lote=500,
-                    progress_cb=progress_cb,
-                    colunas=colunas_thproc_regular
-                )
-                self.after(0, lambda: self._finish_send(df, total, cnjs_duplicados, error_msg))
-
-            threading.Thread(target=worker, daemon=True).start()
+        if self.state.missing_columns and not messagebox.askyesno(
+            'Colunas faltando',
+            f'Estas colunas irão como NULL: {self.state.missing_columns[:20]}. Deseja continuar?'
+        ):
             return
+        self._start_send(self.state.df, regular=usa_fluxo_regular(self.state.empresa))
 
-        ok_natureza, linhas_invalidas, valores_invalidos = validar_campo_natureza(df)
-        if not ok_natureza:
-            msg = (
-                "O envio foi bloqueado.\n\n"
-                "O campo 'natureza' deve conter apenas:\n"
-                " - Judicial\n"
-                " - Administrativa\n\n"
-                f"Valores inválidos encontrados: {', '.join(valores_invalidos)}\n"
-            )
-
-            if linhas_invalidas:
-                msg += f"Linhas com erro: {', '.join(map(str, linhas_invalidas[:20]))}"
-                if len(linhas_invalidas) > 20:
-                    msg += " ..."
-
-            messagebox.showerror('Envio bloqueado', msg)
-            self.lbl_status['text'] = 'Envio bloqueado por erro na coluna natureza.'
+    def _start_send(self, df, regular=False, alternativa=False):
+        # Todos os caminhos de envio da aplicação compartilham esta trava.
+        if self._busy:
             return
+        self._sending = True
+        self._set_busy(True)
+        pb = self.alt_pb if alternativa else self.pb
+        status = self.alt_lbl_status if alternativa else self.lbl_status
+        pb.configure(value=0, maximum=len(df))
+        status['text'] = 'Preparando registros para envio...'
+        colunas = colunas_thproc_regular if regular else colunas_thproc
 
-        ok_cnj, linhas_cnj_invalidas = validar_campo_cnj(df)
-        if not ok_cnj:
-            msg = (
-                "O envio foi bloqueado.\n\n"
-                "O campo 'cnj' não pode começar com espaço em branco.\n"
-            )
-            if linhas_cnj_invalidas:
-                msg += f"\nLinhas com erro: {', '.join(map(str, linhas_cnj_invalidas[:20]))}"
-                if len(linhas_cnj_invalidas) > 20:
-                    msg += " ..."
+        def progress(done, total):
+            callback = self._alt_update_progress if alternativa else self._update_progress
+            self._events.put((callback, (done, total)))
 
-            messagebox.showerror('Envio bloqueado', msg)
-            self.lbl_status['text'] = 'Envio bloqueado por erro na coluna cnj.'
-            return
+        def work():
+            validar_processos(df)
+            registros = montar_registros(df, usar_defaults_opcionais=not regular, colunas=colunas)
+            return inserir_em_lotes(registros, lote=500, progress_cb=progress, colunas=colunas)
 
-        registros = montar_registros(df)
+        def finish(resultado):
+            self._sending = False
+            self._set_busy(False)
+            callback = self._alt_finish_send if alternativa else self._finish_send
+            callback(df, *resultado)
 
-        self.pb['value'] = 0
-        self.pb['maximum'] = len(registros)
-        self.lbl_status['text'] = 'Enviando ao banco...'
+        def fail(mensagem):
+            finish((0, [], mensagem))
 
-        def progress_cb(done, total):
-            self.after(0, lambda: self._update_progress(done, total))
-
-        def worker():
-            total, cnjs_duplicados, error_msg = inserir_em_lotes(registros, lote=500, progress_cb=progress_cb)
-            self.after(0, lambda: self._finish_send(df, total, cnjs_duplicados, error_msg))
-
-        threading.Thread(target=worker, daemon=True).start()
+        self._run_background(work, finish, fail)
 
     def _update_progress(self, done: int, total: int):
         self.pb['value'] = done

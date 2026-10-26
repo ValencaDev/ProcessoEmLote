@@ -5,3 +5,11 @@ dist/
 # Arquivos binários grandes
 *.zip
 *.exe
+
+# Credenciais e arquivos locais
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.pyc

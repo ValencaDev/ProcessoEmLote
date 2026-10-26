@@ -9,7 +9,7 @@ a = Analysis(
     ['cadastroCliente.py'],
     pathex=[],
     binaries=[],
-    datas=[('.env', '.')],
+    datas=[],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
